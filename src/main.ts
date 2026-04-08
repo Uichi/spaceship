@@ -4,13 +4,29 @@ import playerShipSpriteUrl from "./assets/player-ship-placeholder.svg";
 
 type GameState = "Title" | "Playing" | "GameOver";
 
-type Obstacle = {
+type PillarObstacle = {
+  kind: "pillar";
   x: number;
   width: number;
   topHeight: number;
   bottomY: number;
   passed: boolean;
 };
+
+type MovingObstacle = {
+  kind: "moving";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  baseY: number;
+  amplitude: number;
+  phase: number;
+  angularSpeed: number;
+  passed: boolean;
+};
+
+type Obstacle = PillarObstacle | MovingObstacle;
 
 type Player = {
   x: number;
@@ -28,6 +44,12 @@ type CrashParticle = {
   life: number;
   maxLife: number;
   size: number;
+};
+
+type RankingEntry = {
+  name: string;
+  score: number;
+  achievedAt: number;
 };
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -66,9 +88,17 @@ let bestScore = 0;
 let survivedTime = 0;
 let lastTimestamp = 0;
 let crashParticles: CrashParticle[] = [];
+let lastPillarGapCenterY: number | null = null;
+
+const BEST_SCORE_STORAGE_KEY = "gravity-flip-runner.best-score";
+const LEADERBOARD_STORAGE_KEY = "gravity-flip-runner.leaderboard";
+const PLAYER_NAME_STORAGE_KEY = "gravity-flip-runner.player-name";
+const LEADERBOARD_MAX_ENTRIES = 10;
 
 const playerSprite = new Image();
 let isPlayerSpriteLoaded = false;
+let leaderboard: RankingEntry[] = [];
+let currentPlayerName = "PLAYER";
 
 const pressed = new Set<string>();
 
@@ -79,6 +109,133 @@ playerSprite.onload = () => {
 playerSprite.onerror = () => {
   isPlayerSpriteLoaded = false;
 };
+
+function loadBestScore(): number {
+  try {
+    const raw = window.localStorage.getItem(BEST_SCORE_STORAGE_KEY);
+    if (raw === null) {
+      return 0;
+    }
+
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 0;
+    }
+
+    return parsed;
+  } catch {
+    return 0;
+  }
+}
+
+function saveBestScore(nextBestScore: number): void {
+  try {
+    window.localStorage.setItem(BEST_SCORE_STORAGE_KEY, String(nextBestScore));
+  } catch {
+    // Ignore storage errors (private mode/quota) and continue the game.
+  }
+}
+
+function normalizePlayerName(raw: string | null | undefined): string {
+  if (typeof raw !== "string") {
+    return "PLAYER";
+  }
+
+  const normalized = raw.trim().slice(0, 12);
+  return normalized.length > 0 ? normalized : "PLAYER";
+}
+
+function loadPlayerName(): string {
+  try {
+    const raw = window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY);
+    return normalizePlayerName(raw);
+  } catch {
+    return "PLAYER";
+  }
+}
+
+function savePlayerName(name: string): void {
+  try {
+    window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, normalizePlayerName(name));
+  } catch {
+    // Ignore storage errors and keep game running.
+  }
+}
+
+function loadLeaderboard(): RankingEntry[] {
+  try {
+    const raw = window.localStorage.getItem(LEADERBOARD_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const safeEntries = parsed
+      .filter((item): item is Partial<RankingEntry> => typeof item === "object" && item !== null)
+      .map((item) => {
+        const scoreValue = typeof item.score === "number" && Number.isFinite(item.score) ? item.score : 0;
+        const achievedAtValue =
+          typeof item.achievedAt === "number" && Number.isFinite(item.achievedAt)
+            ? item.achievedAt
+            : Date.now();
+
+        return {
+          name: normalizePlayerName(item.name),
+          score: Math.max(0, Math.floor(scoreValue)),
+          achievedAt: Math.floor(achievedAtValue),
+        };
+      })
+      .sort((a, b) => b.score - a.score || a.achievedAt - b.achievedAt)
+      .slice(0, LEADERBOARD_MAX_ENTRIES);
+
+    return safeEntries;
+  } catch {
+    return [];
+  }
+}
+
+function saveLeaderboard(entries: RankingEntry[]): void {
+  try {
+    window.localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage errors and keep game running.
+  }
+}
+
+function tryRecordRanking(currentScore: number): void {
+  if (currentScore <= 0) {
+    return;
+  }
+
+  const qualifies =
+    leaderboard.length < LEADERBOARD_MAX_ENTRIES ||
+    currentScore > leaderboard[leaderboard.length - 1].score;
+
+  if (!qualifies) {
+    return;
+  }
+
+  const askedName = window.prompt("ランキング登録名を入力してください", currentPlayerName);
+  currentPlayerName = normalizePlayerName(askedName);
+  savePlayerName(currentPlayerName);
+
+  leaderboard = [
+    ...leaderboard,
+    {
+      name: currentPlayerName,
+      score: currentScore,
+      achievedAt: Date.now(),
+    },
+  ]
+    .sort((a, b) => b.score - a.score || a.achievedAt - b.achievedAt)
+    .slice(0, LEADERBOARD_MAX_ENTRIES);
+
+  saveLeaderboard(leaderboard);
+}
 
 function resetGame(): void {
   state = "Title";
@@ -92,6 +249,7 @@ function resetGame(): void {
   score = 0;
   survivedTime = 0;
   crashParticles = [];
+  lastPillarGapCenterY = player.y + player.height / 2;
 }
 
 function startGame(): void {
@@ -106,6 +264,7 @@ function startGame(): void {
   score = 0;
   survivedTime = 0;
   crashParticles = [];
+  lastPillarGapCenterY = player.y + player.height / 2;
 }
 
 function flipGravity(): void {
@@ -150,17 +309,72 @@ function updateEffects(dt: number): void {
 }
 
 function spawnObstacle(): void {
-  const width = GAME_CONFIG.obstacle.minWidth + Math.random() * GAME_CONFIG.obstacle.widthVariance;
-  const gap = GAME_CONFIG.obstacle.gap;
-  const minTop = BORDER + GAME_CONFIG.obstacle.edgeMargin;
-  const maxTop = H - BORDER - gap - GAME_CONFIG.obstacle.edgeMargin;
-  const topHeight = minTop + Math.random() * (maxTop - minTop);
+  if (Math.random() < GAME_CONFIG.obstacle.movingSpawnChance) {
+    spawnMovingObstacle();
+    return;
+  }
+
+  spawnPillarObstacle();
+}
+
+function spawnPillarObstacle(): void {
+  const cfg = GAME_CONFIG.obstacle;
+  const width = cfg.minWidth + Math.random() * cfg.widthVariance;
+  const gap = cfg.gap;
+  const minTop = BORDER + cfg.edgeMargin;
+  const maxTop = H - BORDER - gap - cfg.edgeMargin;
+
+  const centerMin = minTop + gap / 2;
+  const centerMax = maxTop + gap / 2;
+  let gapCenterY = centerMin + Math.random() * (centerMax - centerMin);
+
+  if (lastPillarGapCenterY !== null) {
+    let maxShift: number = cfg.maxGapCenterShiftBase;
+    if (cfg.useSpeedScaledGapShift) {
+      const speedRatio = GAME_CONFIG.progression.baseSpeed / Math.max(GAME_CONFIG.progression.baseSpeed, speed);
+      maxShift = Math.max(cfg.maxGapCenterShiftMin, cfg.maxGapCenterShiftBase * speedRatio);
+    }
+
+    const minCenterByPrev = lastPillarGapCenterY - maxShift;
+    const maxCenterByPrev = lastPillarGapCenterY + maxShift;
+    gapCenterY = Math.max(minCenterByPrev, Math.min(maxCenterByPrev, gapCenterY));
+    gapCenterY = Math.max(centerMin, Math.min(centerMax, gapCenterY));
+  }
+
+  const topHeight = gapCenterY - gap / 2;
+  lastPillarGapCenterY = gapCenterY;
 
   obstacles.push({
+    kind: "pillar",
     x: W + width,
     width,
     topHeight,
     bottomY: topHeight + gap,
+    passed: false,
+  });
+}
+
+function spawnMovingObstacle(): void {
+  const cfg = GAME_CONFIG.obstacle;
+  const width = cfg.movingWidth;
+  const height = cfg.movingHeight;
+  const minY = BORDER + cfg.movingEdgeMargin;
+  const maxY = H - BORDER - cfg.movingEdgeMargin - height;
+  const baseY = minY + Math.random() * Math.max(1, maxY - minY);
+  const amplitude = cfg.movingAmplitudeMin + Math.random() * (cfg.movingAmplitudeMax - cfg.movingAmplitudeMin);
+  const angularSpeed = cfg.movingAngularSpeedMin + Math.random() * (cfg.movingAngularSpeedMax - cfg.movingAngularSpeedMin);
+  const phase = Math.random() * Math.PI * 2;
+
+  obstacles.push({
+    kind: "moving",
+    x: W + width,
+    y: baseY,
+    width,
+    height,
+    baseY,
+    amplitude,
+    phase,
+    angularSpeed,
     passed: false,
   });
 }
@@ -172,6 +386,18 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
     a.y < b.y + b.height &&
     a.y + a.height > b.y
   );
+}
+
+function handlePlayerCrash(): void {
+  state = "GameOver";
+  const nextBestScore = Math.max(bestScore, score);
+  if (nextBestScore !== bestScore) {
+    bestScore = nextBestScore;
+    saveBestScore(bestScore);
+  }
+
+  tryRecordRanking(score);
+  spawnCrashParticles(player.x + player.width / 2, player.y + player.height / 2);
 }
 
 function handleInput(): void {
@@ -234,6 +460,14 @@ function update(dt: number): void {
   for (const obstacle of obstacles) {
     obstacle.x -= speed * dt;
 
+    if (obstacle.kind === "moving") {
+      obstacle.phase += obstacle.angularSpeed * dt;
+      const targetY = obstacle.baseY + Math.sin(obstacle.phase) * obstacle.amplitude;
+      const minY = BORDER;
+      const maxY = H - BORDER - obstacle.height;
+      obstacle.y = Math.max(minY, Math.min(maxY, targetY));
+    }
+
     if (!obstacle.passed && obstacle.x + obstacle.width < player.x) {
       obstacle.passed = true;
     }
@@ -245,25 +479,39 @@ function update(dt: number): void {
       height: player.height,
     };
 
-    const topRect = {
-      x: obstacle.x,
-      y: BORDER,
-      width: obstacle.width,
-      height: obstacle.topHeight - BORDER,
-    };
+    if (obstacle.kind === "pillar") {
+      const topRect = {
+        x: obstacle.x,
+        y: BORDER,
+        width: obstacle.width,
+        height: obstacle.topHeight - BORDER,
+      };
 
-    const bottomRect = {
-      x: obstacle.x,
-      y: obstacle.bottomY,
-      width: obstacle.width,
-      height: H - BORDER - obstacle.bottomY,
-    };
+      const bottomRect = {
+        x: obstacle.x,
+        y: obstacle.bottomY,
+        width: obstacle.width,
+        height: H - BORDER - obstacle.bottomY,
+      };
 
-    if (overlaps(playerRect, topRect) || overlaps(playerRect, bottomRect)) {
-      state = "GameOver";
-      bestScore = Math.max(bestScore, score);
-      spawnCrashParticles(player.x + player.width / 2, player.y + player.height / 2);
-      break;
+      if (overlaps(playerRect, topRect) || overlaps(playerRect, bottomRect)) {
+        handlePlayerCrash();
+        break;
+      }
+    }
+
+    if (obstacle.kind === "moving") {
+      const movingRect = {
+        x: obstacle.x,
+        y: obstacle.y,
+        width: obstacle.width,
+        height: obstacle.height,
+      };
+
+      if (overlaps(playerRect, movingRect)) {
+        handlePlayerCrash();
+        break;
+      }
     }
   }
 
@@ -293,19 +541,29 @@ function drawBackground(): void {
 }
 
 function drawObstacles(): void {
-  ctx.fillStyle = "#f37335";
-
   for (const obstacle of obstacles) {
-    const topH = obstacle.topHeight - BORDER;
-    const bottomH = H - BORDER - obstacle.bottomY;
+    if (obstacle.kind === "pillar") {
+      ctx.fillStyle = "#f37335";
+      const topH = obstacle.topHeight - BORDER;
+      const bottomH = H - BORDER - obstacle.bottomY;
 
-    ctx.fillRect(obstacle.x, BORDER, obstacle.width, topH);
-    ctx.fillRect(obstacle.x, obstacle.bottomY, obstacle.width, bottomH);
+      ctx.fillRect(obstacle.x, BORDER, obstacle.width, topH);
+      ctx.fillRect(obstacle.x, obstacle.bottomY, obstacle.width, bottomH);
 
-    ctx.fillStyle = "#ffd166";
-    ctx.fillRect(obstacle.x, obstacle.topHeight - 6, obstacle.width, 6);
-    ctx.fillRect(obstacle.x, obstacle.bottomY, obstacle.width, 6);
-    ctx.fillStyle = "#f37335";
+      ctx.fillStyle = "#ffd166";
+      ctx.fillRect(obstacle.x, obstacle.topHeight - 6, obstacle.width, 6);
+      ctx.fillRect(obstacle.x, obstacle.bottomY, obstacle.width, 6);
+      continue;
+    }
+
+    const glow = 0.5 + 0.5 * Math.sin(obstacle.phase);
+    ctx.fillStyle = "#45d7ff";
+    ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+
+    ctx.globalAlpha = 0.35 + 0.45 * glow;
+    ctx.fillStyle = "#b0f6ff";
+    ctx.fillRect(obstacle.x + 8, obstacle.y + 8, obstacle.width - 16, obstacle.height - 16);
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -379,6 +637,31 @@ function drawHud(): void {
   if (state === "GameOver") {
     drawCenterText("GAME OVER", "クリック / SPACE で再スタート");
   }
+
+  if (state === "Title" || state === "GameOver") {
+    drawLeaderboard();
+  }
+}
+
+function drawLeaderboard(): void {
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#bfe7ff";
+  ctx.font = "bold 18px Trebuchet MS, Segoe UI, sans-serif";
+  ctx.fillText("RANKING", W - 20, 80);
+
+  if (leaderboard.length === 0) {
+    ctx.fillStyle = "#9fc3d9";
+    ctx.font = "16px Trebuchet MS, Segoe UI, sans-serif";
+    ctx.fillText("No records yet", W - 20, 106);
+    return;
+  }
+
+  ctx.font = "16px Trebuchet MS, Segoe UI, sans-serif";
+  leaderboard.slice(0, 5).forEach((entry, index) => {
+    const y = 106 + index * 24;
+    ctx.fillStyle = index === 0 ? "#ffd166" : "#d9efff";
+    ctx.fillText(`${index + 1}. ${entry.name}  ${entry.score}`, W - 20, y);
+  });
 }
 
 function drawCenterText(title: string, subtitle: string): void {
@@ -438,5 +721,8 @@ canvas.addEventListener("pointerdown", () => {
   handleInput();
 });
 
+bestScore = loadBestScore();
+currentPlayerName = loadPlayerName();
+leaderboard = loadLeaderboard();
 resetGame();
 requestAnimationFrame(tick);

@@ -54,24 +54,47 @@ export const GAME_CONFIG = {
     // [SPAWN_RATE] タイトル復帰時の初期間隔。大きいほど障害物が少ない。
     startInterval: 1.25,
     // [SPAWN_RATE] プレイ開始直後の間隔。大きいほど序盤が易しい。
-    initialPlayingInterval: 1.1,
+    initialPlayingInterval: 1.9,
     // [SPAWN_RATE] 最短間隔。小さいほど終盤が高密度になる。
-    minInterval: 0.15,
+    minInterval: 0.6,
     // [DIFFICULTY_RAMP] 時間経過で間隔を縮める速さ。大きいほど急に難化。
     intervalRamp: 0.03,
     // [DIFFICULTY_RAMP] 間隔短縮の起点値。
     baseIntervalForRamp: 1.15,
 
     // [SIZE] 障害物の最小幅。
-    minWidth: 58,
+    minWidth: 48,
     // [SIZE] 幅のランダム増分。大きいほど幅のばらつきが増える。
     widthVariance: 42,
     // [GAP] 上下の通路幅。大きいほど通りやすい。
-    gap: 170,
+    gap: 180,
     // [GAP] 通路生成時の上下余白。大きいほど極端な配置を避ける。
     edgeMargin: 36,
+    // [GAP] 連続する柱の穴中心の最大移動量（低速時）。
+    maxGapCenterShiftBase: 90,
+    // [GAP] 高速時でも保証する最小の最大移動量。
+    maxGapCenterShiftMin: 80,
+    // [GAP] trueで速度に応じて穴の移動量制限を厳しくする。
+    useSpeedScaledGapShift: true,
     // [LIFECYCLE] 画面外に出た障害物を削除する閾値。
     offscreenThreshold: -8,
+
+    // [TYPE_MIX] 移動障害物を生成する確率（0-1）。
+    movingSpawnChance: 0.35,
+    // [TYPE_MIX] 移動障害物の幅。
+    movingWidth: 44,
+    // [TYPE_MIX] 移動障害物の高さ。
+    movingHeight: 44,
+    // [TYPE_MIX] 画面端からの最小余白。
+    movingEdgeMargin: 46,
+    // [TYPE_MIX] 上下揺れ幅の最小値。
+    movingAmplitudeMin: 30,
+    // [TYPE_MIX] 上下揺れ幅の最大値。
+    movingAmplitudeMax: 90,
+    // [TYPE_MIX] 揺れ速度（rad/s）の最小値。
+    movingAngularSpeedMin: 2.2,
+    // [TYPE_MIX] 揺れ速度（rad/s）の最大値。
+    movingAngularSpeedMax: 3.8,
   },
 
   // [PROGRESSION] スクロール速度の難易度曲線
@@ -79,7 +102,7 @@ export const GAME_CONFIG = {
     // [SPEED] 開始時の横スクロール速度。
     baseSpeed: 300,
     // [SPEED] 時間経過による速度上昇率。大きいほど早く難しくなる。
-    speedRamp: 0.03,
+    speedRamp: 0.1,
     // [SPEED] 最高速度の上限。
     maxSpeed: 400,
   },
