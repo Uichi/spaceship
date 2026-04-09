@@ -1,7 +1,8 @@
 # Gravity Flip Runner
 
 重力反転で障害物を回避するランアクションゲームです。
-宇宙船.grottaazzura2023.workers.dev
+
+https://spaceship.grottaazzura2023.workers.dev/
 ## Frontend (Vite)
 
 ### ローカル起動
