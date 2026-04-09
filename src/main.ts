@@ -52,6 +52,11 @@ type RankingEntry = {
   achievedAt: number;
 };
 
+type PendingSubmission = {
+  name: string;
+  score: number;
+};
+
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const maybeCtx = canvas.getContext("2d");
 
@@ -93,6 +98,7 @@ let lastPillarGapCenterY: number | null = null;
 const BEST_SCORE_STORAGE_KEY = "gravity-flip-runner.best-score";
 const LEADERBOARD_STORAGE_KEY = "gravity-flip-runner.leaderboard";
 const PLAYER_NAME_STORAGE_KEY = "gravity-flip-runner.player-name";
+const PENDING_SUBMISSIONS_STORAGE_KEY = "gravity-flip-runner.pending-submissions";
 const LEADERBOARD_MAX_ENTRIES = 10;
 const DEFAULT_PLAYER_NAME = "PLAYER";
 const PLAYER_NAME_MAX_LENGTH = 12;
@@ -102,6 +108,8 @@ let isPlayerSpriteLoaded = false;
 let leaderboard: RankingEntry[] = [];
 let currentPlayerName = DEFAULT_PLAYER_NAME;
 let hasAskedPlayerNameThisSession = false;
+let pendingSubmissions: PendingSubmission[] = [];
+let isFlushingSubmissions = false;
 
 const pressed = new Set<string>();
 
@@ -235,6 +243,57 @@ function saveLeaderboard(entries: RankingEntry[]): void {
   }
 }
 
+function loadPendingSubmissions(): PendingSubmission[] {
+  try {
+    const raw = window.localStorage.getItem(PENDING_SUBMISSIONS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((item): item is { name?: unknown; score?: unknown } => typeof item === "object" && item !== null)
+      .map((item) => {
+        const rawName = typeof item.name === "string" ? item.name : null;
+        const rawScore = typeof item.score === "number" && Number.isFinite(item.score) ? item.score : 0;
+
+        return {
+          name: normalizePlayerName(rawName),
+          score: Math.max(0, Math.floor(rawScore)),
+        };
+      })
+      .filter((item) => item.score > 0)
+      .slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
+function savePendingSubmissions(entries: PendingSubmission[]): void {
+  try {
+    window.localStorage.setItem(PENDING_SUBMISSIONS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage errors and continue.
+  }
+}
+
+function enqueueSubmission(name: string, scoreValue: number): void {
+  const safeScore = Math.max(0, Math.floor(scoreValue));
+  if (safeScore <= 0) {
+    return;
+  }
+
+  pendingSubmissions.push({ name: normalizePlayerName(name), score: safeScore });
+  if (pendingSubmissions.length > 100) {
+    pendingSubmissions = pendingSubmissions.slice(-100);
+  }
+  savePendingSubmissions(pendingSubmissions);
+}
+
 function tryRecordRanking(currentScore: number): void {
   if (currentScore <= 0) {
     return;
@@ -326,9 +385,9 @@ async function fetchGlobalLeaderboard(): Promise<void> {
   }
 }
 
-async function submitScoreToGlobalLeaderboard(name: string, scoreValue: number): Promise<void> {
+async function submitScoreToGlobalLeaderboard(name: string, scoreValue: number): Promise<boolean> {
   if (!isGlobalRankingEnabled()) {
-    return;
+    return false;
   }
 
   try {
@@ -346,12 +405,42 @@ async function submitScoreToGlobalLeaderboard(name: string, scoreValue: number):
     });
 
     if (!response.ok) {
-      return;
+      console.warn("Leaderboard submit failed:", response.status);
+      return false;
     }
 
     await fetchGlobalLeaderboard();
+    return true;
   } catch {
+    console.warn("Leaderboard submit failed due to network error");
     // Keep local ranking as fallback when network is unavailable.
+    return false;
+  }
+}
+
+async function flushPendingSubmissions(): Promise<void> {
+  if (isFlushingSubmissions || pendingSubmissions.length === 0) {
+    return;
+  }
+
+  if (!isGlobalRankingEnabled()) {
+    return;
+  }
+
+  isFlushingSubmissions = true;
+  try {
+    while (pendingSubmissions.length > 0) {
+      const current = pendingSubmissions[0];
+      const ok = await submitScoreToGlobalLeaderboard(current.name, current.score);
+      if (!ok) {
+        break;
+      }
+
+      pendingSubmissions.shift();
+      savePendingSubmissions(pendingSubmissions);
+    }
+  } finally {
+    isFlushingSubmissions = false;
   }
 }
 
@@ -509,7 +598,8 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
 function handlePlayerCrash(): void {
   state = "GameOver";
   if (score > 0) {
-    void submitScoreToGlobalLeaderboard(currentPlayerName, score);
+    enqueueSubmission(currentPlayerName, score);
+    void flushPendingSubmissions();
   }
 
   const nextBestScore = Math.max(bestScore, score);
@@ -851,6 +941,8 @@ canvas.addEventListener("pointerdown", () => {
 bestScore = loadBestScore();
 currentPlayerName = loadPlayerName();
 leaderboard = loadLeaderboard();
+pendingSubmissions = loadPendingSubmissions();
 void fetchGlobalLeaderboard();
+void flushPendingSubmissions();
 resetGame();
 requestAnimationFrame(tick);
