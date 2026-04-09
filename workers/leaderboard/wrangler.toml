@@ -5,4 +5,4 @@ compatibility_date = "2026-04-09"
 [[d1_databases]]
 binding = "DB"
 database_name = "gravity_flip_leaderboard"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "fdf1547a-69ec-43f2-bcb8-6f8bdcd0f5d7"
