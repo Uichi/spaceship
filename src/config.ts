@@ -136,9 +136,9 @@ export const GAME_CONFIG = {
   // [RANKING] ランキング保存設定
   ranking: {
     // [RANKING] trueでサーバーランキングを使用。falseでローカル保存のみ。
-    useGlobalApi: false,
+    useGlobalApi: true,
     // [RANKING] APIのベースURL（例: https://example.workers.dev）。
-    apiBaseUrl: "",
+    apiBaseUrl: "https://gravity-flip-leaderboard.grottaazzura2023.workers.dev",
     // [RANKING] ランキング取得エンドポイント。
     fetchPath: "/api/leaderboard",
     // [RANKING] スコア送信エンドポイント。

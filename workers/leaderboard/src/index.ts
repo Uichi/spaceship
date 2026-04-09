@@ -131,6 +131,17 @@ export default {
       return jsonResponse({ ok: true }, 204);
     }
 
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+      return jsonResponse({
+        ok: true,
+        service: "gravity-flip-leaderboard",
+        endpoints: {
+          leaderboard: "/api/leaderboard?limit=10",
+          submit: "/api/leaderboard/submit",
+        },
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/api/leaderboard") {
       return handleGetLeaderboard(env, url);
     }
