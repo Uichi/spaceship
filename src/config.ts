@@ -132,4 +132,18 @@ export const GAME_CONFIG = {
     // [PARTICLE] 粒の減衰（1秒でどれだけ速度を失うか）。
     crashParticleDamping: 2.6,
   },
+
+  // [RANKING] ランキング保存設定
+  ranking: {
+    // [RANKING] trueでサーバーランキングを使用。falseでローカル保存のみ。
+    useGlobalApi: false,
+    // [RANKING] APIのベースURL（例: https://example.workers.dev）。
+    apiBaseUrl: "",
+    // [RANKING] ランキング取得エンドポイント。
+    fetchPath: "/api/leaderboard",
+    // [RANKING] スコア送信エンドポイント。
+    submitPath: "/api/leaderboard/submit",
+    // [RANKING] 取得・送信のタイムアウト(ms)。
+    requestTimeoutMs: 3000,
+  },
 } as const;

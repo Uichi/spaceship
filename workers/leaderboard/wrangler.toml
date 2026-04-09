@@ -1,0 +1,8 @@
+name = "gravity-flip-leaderboard"
+main = "src/index.ts"
+compatibility_date = "2026-04-09"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gravity_flip_leaderboard"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"

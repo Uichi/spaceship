@@ -94,11 +94,14 @@ const BEST_SCORE_STORAGE_KEY = "gravity-flip-runner.best-score";
 const LEADERBOARD_STORAGE_KEY = "gravity-flip-runner.leaderboard";
 const PLAYER_NAME_STORAGE_KEY = "gravity-flip-runner.player-name";
 const LEADERBOARD_MAX_ENTRIES = 10;
+const DEFAULT_PLAYER_NAME = "PLAYER";
+const PLAYER_NAME_MAX_LENGTH = 12;
 
 const playerSprite = new Image();
 let isPlayerSpriteLoaded = false;
 let leaderboard: RankingEntry[] = [];
-let currentPlayerName = "PLAYER";
+let currentPlayerName = DEFAULT_PLAYER_NAME;
+let hasAskedPlayerNameThisSession = false;
 
 const pressed = new Set<string>();
 
@@ -138,11 +141,11 @@ function saveBestScore(nextBestScore: number): void {
 
 function normalizePlayerName(raw: string | null | undefined): string {
   if (typeof raw !== "string") {
-    return "PLAYER";
+    return DEFAULT_PLAYER_NAME;
   }
 
-  const normalized = raw.trim().slice(0, 12);
-  return normalized.length > 0 ? normalized : "PLAYER";
+  const normalized = raw.trim().slice(0, PLAYER_NAME_MAX_LENGTH);
+  return normalized.length > 0 ? normalized : DEFAULT_PLAYER_NAME;
 }
 
 function loadPlayerName(): string {
@@ -159,6 +162,32 @@ function savePlayerName(name: string): void {
     window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, normalizePlayerName(name));
   } catch {
     // Ignore storage errors and keep game running.
+  }
+}
+
+function hasStoredPlayerName(): boolean {
+  try {
+    return window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function askPlayerName(): void {
+  const initial = currentPlayerName === DEFAULT_PLAYER_NAME ? "" : currentPlayerName;
+  const askedName = window.prompt("プレイヤー名を入力してください", initial);
+  currentPlayerName = normalizePlayerName(askedName);
+  savePlayerName(currentPlayerName);
+}
+
+function ensurePlayerNameOnFirstStart(): void {
+  if (hasAskedPlayerNameThisSession) {
+    return;
+  }
+
+  hasAskedPlayerNameThisSession = true;
+  if (!hasStoredPlayerName()) {
+    askPlayerName();
   }
 }
 
@@ -219,10 +248,6 @@ function tryRecordRanking(currentScore: number): void {
     return;
   }
 
-  const askedName = window.prompt("ランキング登録名を入力してください", currentPlayerName);
-  currentPlayerName = normalizePlayerName(askedName);
-  savePlayerName(currentPlayerName);
-
   leaderboard = [
     ...leaderboard,
     {
@@ -235,6 +260,100 @@ function tryRecordRanking(currentScore: number): void {
     .slice(0, LEADERBOARD_MAX_ENTRIES);
 
   saveLeaderboard(leaderboard);
+  void submitScoreToGlobalLeaderboard(currentPlayerName, currentScore);
+}
+
+function isGlobalRankingEnabled(): boolean {
+  const cfg = GAME_CONFIG.ranking;
+  return cfg.useGlobalApi && cfg.apiBaseUrl.trim().length > 0;
+}
+
+function buildApiUrl(path: string): string {
+  const baseUrl = GAME_CONFIG.ranking.apiBaseUrl.replace(/\/$/, "");
+  return `${baseUrl}${path}`;
+}
+
+function withTimeoutSignal(timeoutMs: number): AbortController {
+  const controller = new AbortController();
+  window.setTimeout(() => controller.abort(), timeoutMs);
+  return controller;
+}
+
+function sanitizeRankingEntries(entries: unknown[]): RankingEntry[] {
+  return entries
+    .filter((item): item is Partial<RankingEntry> => typeof item === "object" && item !== null)
+    .map((item) => {
+      const scoreValue = typeof item.score === "number" && Number.isFinite(item.score) ? item.score : 0;
+      const achievedAtValue =
+        typeof item.achievedAt === "number" && Number.isFinite(item.achievedAt)
+          ? item.achievedAt
+          : Date.now();
+
+      return {
+        name: normalizePlayerName(item.name),
+        score: Math.max(0, Math.floor(scoreValue)),
+        achievedAt: Math.floor(achievedAtValue),
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.achievedAt - b.achievedAt)
+    .slice(0, LEADERBOARD_MAX_ENTRIES);
+}
+
+async function fetchGlobalLeaderboard(): Promise<void> {
+  if (!isGlobalRankingEnabled()) {
+    return;
+  }
+
+  try {
+    const controller = withTimeoutSignal(GAME_CONFIG.ranking.requestTimeoutMs);
+    const response = await fetch(buildApiUrl(GAME_CONFIG.ranking.fetchPath), {
+      method: "GET",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const parsed = (await response.json()) as unknown;
+    if (!Array.isArray(parsed)) {
+      return;
+    }
+
+    leaderboard = sanitizeRankingEntries(parsed);
+    saveLeaderboard(leaderboard);
+  } catch {
+    // Keep local ranking as fallback when network is unavailable.
+  }
+}
+
+async function submitScoreToGlobalLeaderboard(name: string, scoreValue: number): Promise<void> {
+  if (!isGlobalRankingEnabled()) {
+    return;
+  }
+
+  try {
+    const controller = withTimeoutSignal(GAME_CONFIG.ranking.requestTimeoutMs);
+    const response = await fetch(buildApiUrl(GAME_CONFIG.ranking.submitPath), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: normalizePlayerName(name),
+        score: Math.max(0, Math.floor(scoreValue)),
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    await fetchGlobalLeaderboard();
+  } catch {
+    // Keep local ranking as fallback when network is unavailable.
+  }
 }
 
 function resetGame(): void {
@@ -402,6 +521,7 @@ function handlePlayerCrash(): void {
 
 function handleInput(): void {
   if (state === "Title") {
+    ensurePlayerNameOnFirstStart();
     startGame();
     return;
   }
@@ -662,6 +782,10 @@ function drawLeaderboard(): void {
     ctx.fillStyle = index === 0 ? "#ffd166" : "#d9efff";
     ctx.fillText(`${index + 1}. ${entry.name}  ${entry.score}`, W - 20, y);
   });
+
+  ctx.fillStyle = "#9fc3d9";
+  ctx.font = "14px Trebuchet MS, Segoe UI, sans-serif";
+  ctx.fillText(`YOU: ${currentPlayerName}`, W - 20, 234);
 }
 
 function drawCenterText(title: string, subtitle: string): void {
@@ -724,5 +848,6 @@ canvas.addEventListener("pointerdown", () => {
 bestScore = loadBestScore();
 currentPlayerName = loadPlayerName();
 leaderboard = loadLeaderboard();
+void fetchGlobalLeaderboard();
 resetGame();
 requestAnimationFrame(tick);
