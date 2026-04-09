@@ -260,7 +260,6 @@ function tryRecordRanking(currentScore: number): void {
     .slice(0, LEADERBOARD_MAX_ENTRIES);
 
   saveLeaderboard(leaderboard);
-  void submitScoreToGlobalLeaderboard(currentPlayerName, currentScore);
 }
 
 function isGlobalRankingEnabled(): boolean {
@@ -509,6 +508,10 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
 
 function handlePlayerCrash(): void {
   state = "GameOver";
+  if (score > 0) {
+    void submitScoreToGlobalLeaderboard(currentPlayerName, score);
+  }
+
   const nextBestScore = Math.max(bestScore, score);
   if (nextBestScore !== bestScore) {
     bestScore = nextBestScore;
